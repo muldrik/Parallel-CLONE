@@ -11,10 +11,18 @@ import kotlin.math.max
 fun solution(numberOfThreads: Int): ParallelProcessor {
     class MyProc(override val numberOfThreads: Int) : AdvancedParallelProcessor {
 
+        private fun subListSize(listSize: Int) =
+            (listSize+numberOfThreads-1) / numberOfThreads
+
+        //Number of threads that process at least one element. Important when list size is small
+        private fun effectiveNumberOfThreads(listSize: Int) =
+            (listSize+subListSize(listSize)-1) / (subListSize(listSize))
+
         private fun <T, R> withSlices(list: List<T>, block: List<T>.(Int) -> R) {
-            val subListSize = list.size / numberOfThreads + 1
+            val subListSize = subListSize(list.size)
+            val effectiveNumberOfThreads = effectiveNumberOfThreads(list.size)
             val threadList = mutableListOf<Thread>()
-            for (currentThread in 0 until numberOfThreads) {
+            for (currentThread in 0 until effectiveNumberOfThreads) {
                 threadList.add(thread {
                     val startIndex = currentThread * subListSize
                     val maxIndex = minOf(startIndex + subListSize - 1, list.size - 1)
@@ -22,69 +30,57 @@ fun solution(numberOfThreads: Int): ParallelProcessor {
                         .slice(startIndex..maxIndex)
                         .block(currentThread)
                 })
+                if (currentThread * subListSize + subListSize >= list.size)
+                    break
             }
             threadList.forEach { it.join() }
         }
 
         override fun <T> filter(list: List<T>, predicate: (T) -> Boolean): List<T> {
-            TODO("Not yet implemented")
+            if (list.isEmpty())
+                return listOf()
+            val localResults = MutableList(effectiveNumberOfThreads(list.size)) { listOf<T>()}
+            withSlices(list) { currentThread ->
+                localResults[currentThread] = this.filter(predicate)
+            }
+            return localResults.flatten()
         }
 
         override fun <T, R> map(list: List<T>, function: (T) -> R): List<R> {
-            TODO("Not yet implemented")
+            if (list.isEmpty())
+                return listOf()
+            val localResults = MutableList(effectiveNumberOfThreads(list.size)) { listOf<R>()}
+            withSlices(list) { currentThread ->
+                localResults[currentThread] = this.map(function)
+            }
+            return localResults.flatten()
         }
 
         override fun <T> joinToString(list: List<T>, separator: String): String {
-
+            val localResults = MutableList(effectiveNumberOfThreads(list.size)) {""}
+            withSlices(list) { currentThread ->
+                localResults[currentThread] = this.joinToString(separator)
+            }
+            return localResults.joinToString(separator)
         }
 
         override fun <T : Any> minWithOrNull(list: List<T>, comparator: Comparator<T>): T? {
             val localResults = MutableList(numberOfThreads) {list[0]}
-            val block: List<T>.(Int) -> Unit = { currentThread ->
+            withSlices(list) { currentThread ->
                 this
                     .minWithOrNull(comparator)
                     ?.let { localResults[currentThread] = minOf(it, localResults[currentThread], comparator) }
             }
             return localResults.minWithOrNull(comparator)
-
-            /*if (list.isEmpty())
-                return null
-            val subListSize = list.size / numberOfThreads + 1
-            val threadList = mutableListOf<Thread>()
-            val localResults = MutableList(numberOfThreads) {list[0]}
-            for (currentThread in 0 until numberOfThreads) {
-                threadList.add(thread {
-                    val startIndex = currentThread * subListSize
-                    val maxIndex = minOf(startIndex + subListSize - 1, list.size - 1)
-                    list
-                        .slice(startIndex..maxIndex)
-                        .minWithOrNull(comparator)
-                        ?.let {localResults[currentThread] = minOf(it, localResults[currentThread], comparator)}
-                })
-            }
-            threadList.forEach { it.join() }
-            return localResults.minWithOrNull(comparator)*/
         }
 
         override fun <T> all(list: List<T>, predicate: (item: T) -> Boolean): Boolean {
             var result = true
-            val subListSize = list.size / numberOfThreads + 1
-            val threadList = mutableListOf<Thread>()
-            for (currentThread in 0 until numberOfThreads) {
-                threadList.add(thread {
-                    val startIndex = currentThread * subListSize
-                    val maxIndex = minOf(startIndex + subListSize - 1, list.size - 1)
-                    val localResult = list
-                        .slice(startIndex..maxIndex)
-                        .all(predicate)
-                    if (!localResult) {
-                        result = false
-                        return@thread
-                    }
-                    //Thread collision is not a problem since result can only change from true to false once
-                })
+            withSlices(list) {
+                this
+                    .all(predicate)
+                    .let { if (!it) result = false }
             }
-            threadList.forEach { it.join() }
             return result
         }
     }
