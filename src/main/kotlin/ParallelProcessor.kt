@@ -1,8 +1,6 @@
 package com.h0tk3y.spbsu.parallel
 
-import java.util.concurrent.ConcurrentHashMap
 import kotlin.concurrent.thread
-import kotlin.math.max
 
 /**
  * Return your implementation of [ParallelProcessor]. To enroll for the advanced task, make it implement
