@@ -6,15 +6,42 @@ import kotlin.concurrent.thread
  * Return your implementation of [ParallelProcessor]. To enroll for the advanced task, make it implement
  * [AdvancedParallelProcessor] as well.
  */
+
+
+
 fun solution(numberOfThreads: Int): ParallelProcessor {
     class MyProc(override val numberOfThreads: Int) : AdvancedParallelProcessor {
 
-        private fun subListSize(listSize: Int) =
-            (listSize+numberOfThreads-1) / numberOfThreads
+        @Volatile
+        var currentIndex = 0
 
-        //Number of threads that process at least one element. Important when list size is small
+        @Synchronized fun getAndIncrementCounter(increment: Int): Int {
+            currentIndex+=increment
+            return currentIndex-increment
+        }
+
+        private fun <T, R> withThreadQueue(list: List<T>, block: T.(Int) -> R) {
+            currentIndex = 0
+            val threadList = mutableListOf<Thread>()
+            for (currentThread in 0 until numberOfThreads) {
+                threadList.add(thread {
+                    while (true) {
+                        var index = 0
+                        index = getAndIncrementCounter(1)
+                        if (index >= list.size)
+                            return@thread
+                        list[index].block(currentThread)
+                    }
+                })
+            }
+            threadList.forEach { it.join() }
+        }
+
+        private fun subListSize(listSize: Int) =
+                (listSize+numberOfThreads-1) / numberOfThreads
+
         private fun effectiveNumberOfThreads(listSize: Int) =
-            (listSize+subListSize(listSize)-1) / (subListSize(listSize))
+                (listSize+subListSize(listSize)-1) / (subListSize(listSize))
 
         private fun <T, R> withSlices(list: List<T>, block: List<T>.(Int) -> R) {
             val subListSize = subListSize(list.size)
@@ -25,8 +52,8 @@ fun solution(numberOfThreads: Int): ParallelProcessor {
                     val startIndex = currentThread * subListSize
                     val maxIndex = minOf(startIndex + subListSize - 1, list.size - 1)
                     list
-                        .slice(startIndex..maxIndex)
-                        .block(currentThread)
+                            .slice(startIndex..maxIndex)
+                            .block(currentThread)
                 })
                 if (currentThread * subListSize + subListSize >= list.size)
                     break
@@ -63,21 +90,21 @@ fun solution(numberOfThreads: Int): ParallelProcessor {
         }
 
         override fun <T : Any> minWithOrNull(list: List<T>, comparator: Comparator<T>): T? {
-            val localResults = MutableList(numberOfThreads) {list[0]}
-            withSlices(list) { currentThread ->
-                this
-                    .minWithOrNull(comparator)
-                    ?.let { localResults[currentThread] = minOf(it, localResults[currentThread], comparator) }
+            if (list.isEmpty()) return null
+            val resultList = MutableList(numberOfThreads) {list[0]}
+            withThreadQueue(list) { currentThread ->
+                resultList[currentThread] = minOf(this, resultList[currentThread], comparator)
             }
-            return localResults.minWithOrNull(comparator)
+            return resultList.minWithOrNull(comparator)
         }
 
         override fun <T> all(list: List<T>, predicate: (item: T) -> Boolean): Boolean {
             var result = true
-            withSlices(list) {
-                this
-                    .all(predicate)
-                    .let { if (!it) result = false }
+            withThreadQueue(list) { _ ->
+                if (!predicate(this)) {
+                    result = false
+                    getAndIncrementCounter(list.size)
+                }
             }
             return result
         }
