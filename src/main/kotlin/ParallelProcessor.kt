@@ -26,8 +26,7 @@ fun solution(numberOfThreads: Int): ParallelProcessor {
             for (currentThread in 0 until numberOfThreads) {
                 threadList.add(thread {
                     while (true) {
-                        var index = 0
-                        index = getAndIncrementCounter(1)
+                        val index = getAndIncrementCounter(1)
                         if (index >= list.size)
                             return@thread
                         list[index].block(currentThread)
@@ -100,7 +99,7 @@ fun solution(numberOfThreads: Int): ParallelProcessor {
 
         override fun <T> all(list: List<T>, predicate: (item: T) -> Boolean): Boolean {
             var result = true
-            withThreadQueue(list) { _ ->
+            withThreadQueue(list) {
                 if (!predicate(this)) {
                     result = false
                     getAndIncrementCounter(list.size)
