@@ -13,24 +13,28 @@ import kotlin.concurrent.thread
 fun solution(numberOfThreads: Int): ParallelProcessor {
     class MyProc(override val numberOfThreads: Int) : AdvancedParallelProcessor {
 
-        @Volatile
-        var currentIndex = 0
+        inner class Counter {
+            @Volatile
+            var currentIndex = 0
 
-        @Synchronized fun getAndIncrementCounter(increment: Int): Int {
-            currentIndex+=increment
-            return currentIndex-increment
+            @Synchronized fun getAndIncrementCounter(increment: Int): Int {
+                currentIndex+=increment
+                return currentIndex-increment
+            }
         }
 
-        private fun <T, R> withThreadQueue(list: List<T>, block: T.(Int, Int) -> R) {
-            currentIndex = 0
+        inner class IterationInfo(val currentThread: Int, val index: Int, val counter: Counter)
+
+        private fun <T, R> withThreadQueue(list: List<T>, block: T.(IterationInfo) -> R) {
+            val counter = Counter()
             val threadList = mutableListOf<Thread>()
             for (currentThread in 0 until numberOfThreads) {
                 threadList.add(thread {
                     while (true) {
-                        val index = getAndIncrementCounter(1)
+                        val index = counter.getAndIncrementCounter(1)
                         if (index >= list.size)
                             return@thread
-                        list[index].block(currentThread, index)
+                        list[index].block(IterationInfo(currentThread, index, counter))
                     }
                 })
             }
@@ -41,8 +45,8 @@ fun solution(numberOfThreads: Int): ParallelProcessor {
             if (list.isEmpty())
                 return listOf()
             val localResults = MutableList(list.size) { false }
-            withThreadQueue(list) { _, index ->
-                localResults[index] = predicate(this)
+            withThreadQueue(list) {
+                localResults[it.index] = predicate(this)
             }
             return list.filterIndexed { index, _ -> localResults[index] }
         }
@@ -51,16 +55,16 @@ fun solution(numberOfThreads: Int): ParallelProcessor {
             if (list.isEmpty())
                 return listOf()
             val localResults = MutableList<R?>(list.size) {null}
-            withThreadQueue(list) { _, index ->
-                localResults[index] = function(this)
+            withThreadQueue(list) {
+                localResults[it.index] = function(this)
             }
             return localResults.map { it!! }
         }
 
         override fun <T> joinToString(list: List<T>, separator: String): String {
             val localResults = MutableList(list.size) {""}
-            withThreadQueue(list) { _, index ->
-                localResults[index] = this.toString()
+            withThreadQueue(list) {
+                localResults[it.index] = this.toString()
             }
             return localResults.joinToString(separator)
         }
@@ -68,18 +72,18 @@ fun solution(numberOfThreads: Int): ParallelProcessor {
         override fun <T : Any> minWithOrNull(list: List<T>, comparator: Comparator<T>): T? {
             if (list.isEmpty()) return null
             val resultList = MutableList(numberOfThreads) {list[0]}
-            withThreadQueue(list) { currentThread, _ ->
-                resultList[currentThread] = minOf(this, resultList[currentThread], comparator)
+            withThreadQueue(list) {
+                resultList[it.currentThread] = minOf(this, resultList[it.currentThread], comparator)
             }
             return resultList.minWithOrNull(comparator)
         }
 
         override fun <T> all(list: List<T>, predicate: (item: T) -> Boolean): Boolean {
             var result = true
-            withThreadQueue(list) { _, _ ->
+            withThreadQueue(list) {
                 if (!predicate(this)) {
                     result = false
-                    getAndIncrementCounter(list.size) //Every thread will exit on their next iteration
+                    it.counter.getAndIncrementCounter(list.size) //All threads will exit on next iteration
                 }
             }
             return result
