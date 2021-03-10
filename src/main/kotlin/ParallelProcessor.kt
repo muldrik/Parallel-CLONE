@@ -1,10 +1,92 @@
 package com.h0tk3y.spbsu.parallel
 
+import java.util.concurrent.ConcurrentSkipListSet
+import kotlin.concurrent.thread
+
 /**
  * Return your implementation of [ParallelProcessor]. To enroll for the advanced task, make it implement
  * [AdvancedParallelProcessor] as well.
  */
-fun solution(numberOfThreads: Int): ParallelProcessor = TODO()
+
+
+
+fun solution(numberOfThreads: Int): ParallelProcessor {
+    class MyProc(override val numberOfThreads: Int) : AdvancedParallelProcessor {
+
+        @Volatile
+        var currentIndex = 0
+
+        @Synchronized fun getAndIncrementCounter(increment: Int): Int {
+            currentIndex+=increment
+            return currentIndex-increment
+        }
+
+        private fun <T, R> withThreadQueue(list: List<T>, block: T.(Int, Int) -> R) {
+            currentIndex = 0
+            val threadList = mutableListOf<Thread>()
+            for (currentThread in 0 until numberOfThreads) {
+                threadList.add(thread {
+                    while (true) {
+                        val index = getAndIncrementCounter(1)
+                        if (index >= list.size)
+                            return@thread
+                        list[index].block(currentThread, index)
+                    }
+                })
+            }
+            threadList.forEach { it.join() }
+        }
+
+        override fun <T> filter(list: List<T>, predicate: (T) -> Boolean): List<T> {
+            if (list.isEmpty())
+                return listOf()
+            val localResults = MutableList(list.size) { false }
+            withThreadQueue(list) { _, index ->
+                localResults[index] = predicate(this)
+            }
+            return list.filterIndexed { index, _ -> localResults[index] }
+        }
+
+        override fun <T, R> map(list: List<T>, function: (T) -> R): List<R> {
+            if (list.isEmpty())
+                return listOf()
+            val localResults = MutableList<R?>(list.size) {null}
+            withThreadQueue(list) { _, index ->
+                localResults[index] = function(this)
+            }
+            return localResults.map { it!! }
+        }
+
+        override fun <T> joinToString(list: List<T>, separator: String): String {
+            val localResults = MutableList(list.size) {""}
+            withThreadQueue(list) { _, index ->
+                localResults[index] = this.toString()
+            }
+            return localResults.joinToString(separator)
+        }
+
+        override fun <T : Any> minWithOrNull(list: List<T>, comparator: Comparator<T>): T? {
+            if (list.isEmpty()) return null
+            val resultList = MutableList(numberOfThreads) {list[0]}
+            withThreadQueue(list) { currentThread, _ ->
+                resultList[currentThread] = minOf(this, resultList[currentThread], comparator)
+            }
+            return resultList.minWithOrNull(comparator)
+        }
+
+        override fun <T> all(list: List<T>, predicate: (item: T) -> Boolean): Boolean {
+            var result = true
+            withThreadQueue(list) { _, _ ->
+                if (!predicate(this)) {
+                    result = false
+                    getAndIncrementCounter(list.size) //Every thread will exit on their next iteration
+                }
+            }
+            return result
+        }
+    }
+    return MyProc(numberOfThreads)
+}
 
 /**
  * Basic task: implement parallel processing of a list of elements, with the same semantics of the operations as the
